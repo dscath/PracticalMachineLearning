@@ -1,0 +1,146 @@
+---
+title: "Machine Learning Model for Human Activity Recognition"
+output: html_document
+---
+
+### Introduction
+
+Human activity recognition (HAR) research has traditionally focused on discriminating between different activities, i.e. to predict *which* activity was performed at a specific point in time. For the Weight Lifting Dataset we propose to investigate *how well* an activity was performed. This aspect of HAR has potential application in sport training.
+
+The dataset used for this assignement was produced by instructing six participants to perform one set of 10 repetition of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. 
+
+The original study titled "Qualitative activity recognition of weight lifting exercises"[http://dx.doi.org/10.1145/2459236.2459256] was published in 2013
+
+The goal of the project is to predict **how well** the excercise was performed, i.e. predict the "classe" variable in the dataset.
+
+
+###Getting and cleaning data
+
+```{r library, echo=TRUE, warning=FALSE, message=FALSE}
+library(caret)
+library(corrplot)
+library(parallel)
+library(doParallel)
+```
+
+```{r downloading data and reading, echo=TRUE,message=FALSE, warning=FALSE}
+
+train_url <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+train_file <- "pml-training.csv"
+test_file  <- "pml-testing.csv"
+if (!file.exists(train_file)) {
+  download.file(train_url, destfile=train_file, method = "curl")
+}
+if (!file.exists(test_file)) {
+  download.file(test_url, destfile=test_file, method = "curl")
+}
+
+data <- read.csv(train_file, na.strings = c("NA","","#DIV/0!"))
+test <- read.csv(test_file, na.strings = c("NA","","#DIV/0!"))
+```
+
+
+###Exploring and cleaning data
+
+The dataset *data* contains `r dim(data)[1]` observables and `r dim(data)[2]` variables.
+
+A summary of data highlight what columns wouldn't be useful as predictors:
+  - columns that are mostly NA
+  - variables such as column name, user_name, various timestamp (column 1-6)
+  - variable with almost no variability
+
+
+```{r clean data ec}
+# Keep columns with less than 30% NA
+clean_data <- data[, colSums(is.na(data)) < nrow(data) *0.3]
+
+# Remove near zero variances variables
+nzv <- nearZeroVar(clean_data, saveMetrics = T)
+clean_data <- clean_data[, !nzv$nzv]
+
+# Remove variable that have no predictive value
+clean_data <- clean_data[, -c(1:6)]
+```
+
+After cleaning, `r dim(clean_data)[2]` variables remain. For information, the following figures illustrate the correlation between predictors and the distribution of the "classe" variable. 
+
+```{r explore correlation, echo=FALSE, message=FALSE, warning=FALSE}
+# Examine correlation among features
+corrplot(cor(clean_data[, -dim(clean_data)[2]]), method="color", tl.cex = 0.5)
+
+ggplot(clean_data, aes(x=classe, fill=classe)) + geom_bar() + theme_bw()
+```
+
+Finaly the cleaned data is partition for model training. A small partition is used to speed up model calculation.
+
+```{r partition, echo=TRUE, message=FALSE, warning=FALSE}
+set.seed(9876)
+inTrain <- createDataPartition(clean_data$classe, p = 0.3, list = FALSE)
+train_data <- clean_data[inTrain,]
+valid_data <- clean_data[-inTrain,]
+```
+
+
+###Model generation
+
+Random forest is chosen to model the data. The method is able to handle a large number of features, comprising both unsacled variables and categorical variables. More over random forest is relatively immune to overfitting and is insentitive to feature correlation.
+
+A model is build using Random forest with 5 fold cross validation. 
+
+
+```{r random_forest, echo=TRUE, message=FALSE, warning=FALSE}
+set.seed(1234)
+# Parallel execution of code
+registerDoParallel(makeCluster(detectCores()))
+
+model_rf<-train(classe~.,data=train_data,method="rf",
+                trControl=trainControl(method="cv",number=5),
+                prox=TRUE,allowParallel=TRUE)
+```
+
+```{r}
+print(model_rf)
+print(model_rf$finalModel)
+```
+
+###Model evaluation:
+
+The model is used to predict the classe of the validation partition, thus evaluating the out of sample error.
+
+```{r}
+validation_rf <- predict(model_rf, valid_data)
+cm <- confusionMatrix(validation_rf, valid_data$classe)
+ac <- cm$overall['Accuracy']
+print(cm)
+```
+
+The cross validation accuracy is `r round(100*ac,2)`% and the out-of-sample error is `r 100-round(100*ac,2)`%. The random forest model performs very well on this dataset.
+
+
+### Test data prediction
+
+Finally, the model is applied to predict the classe of the observations in the test data.
+
+```{r}
+ptest <- predict(model_rf, test)
+```
+
+### Coursera submission
+
+Results written in predictions/ directory
+
+```{r}
+answers <- as.vector(ptest)
+
+pml_write_files = function(x){
+  path <- "predictions/"
+  for(i in 1:length(x)){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=file.path(path, filename),quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(answers)
+
+```
+
